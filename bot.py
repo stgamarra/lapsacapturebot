@@ -243,13 +243,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = f"📢 *LapsaCaptureBot v{VERSION}*\n\n"
+    """Send only the latest version's changelog."""
+    latest_version = next(iter(CHANGELOG))
+    latest_changes = CHANGELOG[latest_version]
     
-    for version, changes in list(CHANGELOG.items())[:3]:
-        message += f"*Version {version}*\n"
-        for change in changes:
-            message += f"{change}\n"
-        message += "\n"
+    message = f"📢 *What's new in v{latest_version}*\n\n"
+    for change in latest_changes:
+        message += f"{change}\n"
     
     await update.message.reply_text(message, parse_mode='Markdown')
 
