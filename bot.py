@@ -2,10 +2,13 @@ import os
 import re
 import uuid
 import asyncio
+import subprocess
+import json
 from dotenv import load_dotenv
 from telegram import Update, InputMediaPhoto, InputMediaVideo
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 import yt_dlp
+import imageio_ffmpeg
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -13,9 +16,13 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # ==========================================
 # VERSION & CHANGELOG
 # ==========================================
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 CHANGELOG = {
+    "1.1.1": [
+        "🎞️ Fixed vertical videos showing as squares (aspect ratio fix)",
+        "📐 Videos now include correct dimensions and duration",
+    ],
     "1.1.0": [
         "➕ Added support for Threads links",
         "➕ Added support for Facebook Reels and fb.watch links",
@@ -49,10 +56,12 @@ IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp'}
 VIDEO_EXTS = {'.mp4', '.mov', '.webm', '.mkv'}
 ALBUM_MAX = 10
 
-# Errors where retry wouldn't help
 NON_RETRYABLE_KEYWORDS = ['login', 'private', 'not available', '404', 'restricted', 'unavailable']
 
 
+# ==========================================
+# HELPERS
+# ==========================================
 def extract_url(text):
     pattern = r'(https?://[^\s]+)'
     urls = re.findall(pattern, text)
@@ -64,11 +73,51 @@ def is_supported(url):
 
 
 def is_retryable_error(error_msg):
-    """Check if an error is worth retrying (network/timeout vs permanent)."""
     err = str(error_msg).lower()
     return not any(keyword in err for keyword in NON_RETRYABLE_KEYWORDS)
 
 
+def get_video_info(path):
+    """Extract width, height, and duration from a video file using ffprobe."""
+    try:
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        ffprobe_exe = ffmpeg_exe.replace('ffmpeg', 'ffprobe')
+        
+        result = subprocess.run(
+            [ffprobe_exe, '-v', 'quiet', '-print_format', 'json',
+             '-show_streams', '-show_format', path],
+            capture_output=True, text=True, timeout=10
+        )
+        data = json.loads(result.stdout)
+        
+        video_stream = next(
+            (s for s in data.get('streams', []) if s.get('codec_type') == 'video'),
+            None
+        )
+        if not video_stream:
+            return None
+        
+        return {
+            'width': int(video_stream.get('width', 0)),
+            'height': int(video_stream.get('height', 0)),
+            'duration': int(float(data.get('format', {}).get('duration', 0))),
+        }
+    except Exception:
+        return None
+
+
+def classify_file(path):
+    ext = os.path.splitext(path)[1].lower()
+    if ext in IMAGE_EXTS:
+        return 'image'
+    elif ext in VIDEO_EXTS:
+        return 'video'
+    return 'unknown'
+
+
+# ==========================================
+# DOWNLOAD
+# ==========================================
 def download_media(url, session_id):
     output_template = os.path.join(DOWNLOAD_DIR, f"{session_id}_%(playlist_index)s.%(ext)s")
     
@@ -94,7 +143,7 @@ def download_media(url, session_id):
 
 
 async def download_with_retry(url, session_id, max_retries=1):
-    """Try to download. If it fails due to network/timeout, retry once."""
+    """Try to download. Retry once on retryable errors."""
     last_error = None
     for attempt in range(max_retries + 1):
         try:
@@ -102,21 +151,14 @@ async def download_with_retry(url, session_id, max_retries=1):
         except Exception as e:
             last_error = e
             if attempt < max_retries and is_retryable_error(e):
-                # Wait a bit before retrying
                 await asyncio.sleep(2)
                 continue
             raise last_error
 
 
-def classify_file(path):
-    ext = os.path.splitext(path)[1].lower()
-    if ext in IMAGE_EXTS:
-        return 'image'
-    elif ext in VIDEO_EXTS:
-        return 'video'
-    return 'unknown'
-
-
+# ==========================================
+# SEND
+# ==========================================
 async def send_as_album(update, files):
     valid_files = []
     skipped = 0
@@ -133,6 +175,7 @@ async def send_as_album(update, files):
     if not valid_files:
         return
     
+    # Single item — send directly (albums require 2+ items)
     if len(valid_files) == 1:
         path = valid_files[0]
         kind = classify_file(path)
@@ -140,9 +183,20 @@ async def send_as_album(update, files):
             if kind == 'image':
                 await update.message.reply_photo(f)
             elif kind == 'video':
-                await update.message.reply_video(f)
+                info = get_video_info(path)
+                if info and info['width'] and info['height']:
+                    await update.message.reply_video(
+                        f,
+                        width=info['width'],
+                        height=info['height'],
+                        duration=info['duration'],
+                        supports_streaming=True,
+                    )
+                else:
+                    await update.message.reply_video(f, supports_streaming=True)
         return
     
+    # Multiple items — send as album(s) of up to 10
     for i in range(0, len(valid_files), ALBUM_MAX):
         chunk = valid_files[i:i + ALBUM_MAX]
         media_group = []
@@ -153,10 +207,21 @@ async def send_as_album(update, files):
                 kind = classify_file(path)
                 f = open(path, 'rb')
                 open_files.append(f)
+                
                 if kind == 'image':
                     media_group.append(InputMediaPhoto(f))
                 elif kind == 'video':
-                    media_group.append(InputMediaVideo(f))
+                    info = get_video_info(path)
+                    if info and info['width'] and info['height']:
+                        media_group.append(InputMediaVideo(
+                            f,
+                            width=info['width'],
+                            height=info['height'],
+                            duration=info['duration'],
+                            supports_streaming=True,
+                        ))
+                    else:
+                        media_group.append(InputMediaVideo(f, supports_streaming=True))
             
             if media_group:
                 await update.message.reply_media_group(media_group)
@@ -178,10 +243,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send the latest changelog."""
     message = f"📢 *LapsaCaptureBot v{VERSION}*\n\n"
     
-    # Show the 3 most recent versions
     for version, changes in list(CHANGELOG.items())[:3]:
         message += f"*Version {version}*\n"
         for change in changes:
@@ -194,7 +257,7 @@ async def updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
     
-    # Handle @botmention updates (e.g. "@lapsacapturebot updates")
+    # Support "@lapsacapturebot updates" mention
     bot_username = context.bot.username.lower()
     if f"@{bot_username}" in text.lower() and "updates" in text.lower():
         await updates(update, context)
@@ -240,6 +303,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 os.remove(path)
 
 
+# ==========================================
+# MAIN
+# ==========================================
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("updates", updates))
