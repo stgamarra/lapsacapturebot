@@ -16,7 +16,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # ==========================================
 # VERSION & CHANGELOG
 # ==========================================
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 
 CHANGELOG = {
      "1.2.0": [
@@ -305,8 +305,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if os.path.exists(path):
                 os.remove(path)
 
-from telegram.ext import MessageHandler, filters
-
 # ==========================================
 # EASTER EGGS 🥚
 # ==========================================
@@ -338,6 +336,7 @@ app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("updates", updates))
 app.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 print(f"🤖 LapsaCaptureBot v{VERSION} is running...")
 app.run_polling()
