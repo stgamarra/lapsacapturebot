@@ -5,8 +5,8 @@ import asyncio
 import subprocess
 import json
 from dotenv import load_dotenv
-from telegram import Update, InputMediaPhoto, InputMediaVideo
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
+from telegram import Update, InputMediaPhoto, InputMediaVideo, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 import yt_dlp
 import imageio_ffmpeg
 
@@ -16,10 +16,13 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # ==========================================
 # VERSION & CHANGELOG
 # ==========================================
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 CHANGELOG = {
-     "1.2.0": [
+    "1.3.0": [
+        "🔄 Added retry button when downloads fail due to network/timeout",
+    ],
+    "1.2.0": [
         "🥚 Added easter egg responses",
     ],
     "1.1.1": [
@@ -116,6 +119,79 @@ def classify_file(path):
     elif ext in VIDEO_EXTS:
         return 'video'
     return 'unknown'
+
+# In-memory store for retry URLs (keyed by message ID)
+RETRY_STORE = {}
+
+def make_retry_keyboard(url):
+    """Create an inline keyboard with a retry button."""
+    # We can't put the URL directly in callback_data (64 byte limit)
+    # So we store it and pass a short ID
+    retry_id = str(uuid.uuid4())[:8]
+    RETRY_STORE[retry_id] = url
+    
+    keyboard = [[InlineKeyboardButton("🔄 Retry", callback_data=f"retry:{retry_id}")]]
+    return InlineKeyboardMarkup(keyboard)
+
+async def send_as_album_from_query(query, files):
+    """Same as send_as_album but for callback queries."""
+    valid_files = []
+    skipped = 0
+    for path in files:
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+        if size_mb > 50:
+            skipped += 1
+            continue
+        valid_files.append(path)
+    
+    if skipped > 0:
+        await query.message.reply_text(f"⚠️ Skipped {skipped} oversized file(s) (>50MB)")
+    
+    if not valid_files:
+        return
+    
+    if len(valid_files) == 1:
+        path = valid_files[0]
+        kind = classify_file(path)
+        with open(path, 'rb') as f:
+            if kind == 'image':
+                await query.message.reply_photo(f)
+            elif kind == 'video':
+                info = get_video_info(path)
+                if info and info['width'] and info['height']:
+                    await query.message.reply_video(
+                        f, width=info['width'], height=info['height'],
+                        duration=info['duration'], supports_streaming=True,
+                    )
+                else:
+                    await query.message.reply_video(f, supports_streaming=True)
+        return
+    
+    for i in range(0, len(valid_files), ALBUM_MAX):
+        chunk = valid_files[i:i + ALBUM_MAX]
+        media_group = []
+        open_files = []
+        try:
+            for path in chunk:
+                kind = classify_file(path)
+                f = open(path, 'rb')
+                open_files.append(f)
+                if kind == 'image':
+                    media_group.append(InputMediaPhoto(f))
+                elif kind == 'video':
+                    info = get_video_info(path)
+                    if info and info['width'] and info['height']:
+                        media_group.append(InputMediaVideo(
+                            f, width=info['width'], height=info['height'],
+                            duration=info['duration'], supports_streaming=True,
+                        ))
+                    else:
+                        media_group.append(InputMediaVideo(f, supports_streaming=True))
+            if media_group:
+                await query.message.reply_media_group(media_group)
+        finally:
+            for f in open_files:
+                f.close()
 
 
 # ==========================================
@@ -292,18 +368,88 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🔒 This content requires login.\n\n"
                 "Stories and private accounts need authentication."
             )
+            # No retry — login won't fix itself
         elif 'not available' in err or '404' in err or 'unavailable' in err:
             await status_msg.edit_text("❌ Content unavailable (deleted or region-locked).")
+            # No retry — content is gone
         else:
-            await status_msg.edit_text(f"❌ Couldn't download after retry: {str(e)[:150]}")
+            # Network/timeout — retry might work!
+            await status_msg.edit_text(
+                f"❌ Couldn't download: {str(e)[:150]}",
+                reply_markup=make_retry_keyboard(url)
+            )
 
     except Exception as e:
-        await status_msg.edit_text(f"❌ Unexpected error: {str(e)[:150]}")
+        await status_msg.edit_text(
+            f"❌ Unexpected error: {str(e)[:150]}",
+            reply_markup=make_retry_keyboard(url)
+        )
 
     finally:
         for path in files:
             if os.path.exists(path):
                 os.remove(path)
+
+async def handle_retry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the retry button tap."""
+    query = update.callback_query
+    await query.answer()  # Removes the loading state on the button
+    
+    # Extract retry ID from callback data
+    callback_data = query.data
+    if not callback_data.startswith("retry:"):
+        return
+    
+    retry_id = callback_data.split(":", 1)[1]
+    url = RETRY_STORE.get(retry_id)
+    
+    if not url:
+        await query.edit_message_text("❌ Retry expired. Please send the link again.")
+        return
+    
+    # Remove the retry button and show "retrying"
+    await query.edit_message_text("🔄 Retrying download...")
+    
+    session_id = str(uuid.uuid4())[:8]
+    files = []
+    
+    try:
+        files = await download_with_retry(url, session_id, max_retries=1)
+        
+        if not files:
+            await query.edit_message_text("❌ No media found at that link.")
+            return
+        
+        await query.edit_message_text(f"📦 Found {len(files)} item(s), sending...")
+        await send_as_album_from_query(query, files)
+        await query.delete_message()
+        
+        # Clean up the retry store
+        RETRY_STORE.pop(retry_id, None)
+    
+    except yt_dlp.utils.DownloadError as e:
+        err = str(e).lower()
+        if 'login' in err or 'private' in err:
+            await query.edit_message_text("🔒 This content requires login.")
+        elif 'not available' in err or '404' in err:
+            await query.edit_message_text("❌ Content unavailable.")
+        else:
+            await query.edit_message_text(
+                f"❌ Still failing: {str(e)[:150]}",
+                reply_markup=make_retry_keyboard(url)
+            )
+    
+    except Exception as e:
+        await query.edit_message_text(
+            f"❌ Error: {str(e)[:150]}",
+            reply_markup=make_retry_keyboard(url)
+        )
+    
+    finally:
+        for path in files:
+            if os.path.exists(path):
+                os.remove(path)
+
 
 # ==========================================
 # EASTER EGGS 🥚
@@ -337,6 +483,7 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("updates", updates))
 app.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+app.add_handler(CallbackQueryHandler(handle_retry, pattern=r'^retry:')) 
 
 print(f"🤖 LapsaCaptureBot v{VERSION} is running...")
 app.run_polling()
