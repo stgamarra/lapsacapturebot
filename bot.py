@@ -302,6 +302,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if os.path.exists(path):
                 os.remove(path)
 
+from telegram.ext import MessageHandler, filters
+
+async def log_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Temporary handler to capture sticker IDs."""
+    sticker = update.message.sticker
+    print(f"📍 Sticker received!")
+    print(f"   file_unique_id: {sticker.file_unique_id}")
+    print(f"   emoji: {sticker.emoji}")
+    print(f"   set_name: {sticker.set_name}")
+    await update.message.reply_text(
+        f"Sticker ID captured!\n`{sticker.file_unique_id}`",
+        parse_mode='Markdown'
+    )
+
+# Add this with your other handlers:
+app.add_handler(MessageHandler(filters.Sticker.ALL, log_sticker))
 
 # ==========================================
 # MAIN
