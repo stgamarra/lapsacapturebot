@@ -19,6 +19,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 VERSION = "1.1.1"
 
 CHANGELOG = {
+     "1.2.0": [
+        "🥚 Added easter egg responses",
+    ],
     "1.1.1": [
         "🎞️ Fixed vertical videos showing as squares (aspect ratio fix)",
         "📐 Videos now include correct dimensions and duration",
@@ -304,18 +307,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 from telegram.ext import MessageHandler, filters
 
-async def log_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Temporary handler to capture sticker IDs."""
-    sticker = update.message.sticker
-    print(f"📍 Sticker received!")
-    print(f"   file_unique_id: {sticker.file_unique_id}")
-    print(f"   emoji: {sticker.emoji}")
-    print(f"   set_name: {sticker.set_name}")
-    await update.message.reply_text(
-        f"Sticker ID captured!\n`{sticker.file_unique_id}`",
-        parse_mode='Markdown'
-    )
+# ==========================================
+# EASTER EGGS 🥚
+# ==========================================
+EASTER_EGG_STICKERS = {
+    "AgAD4gEAAjlmLwAB": "Chúpate tu esa, cachón. ¿Tú no respetas?",
+}
 
+async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Respond to specific stickers, but only when replying to the bot."""
+    sticker = update.message.sticker
+    if not sticker or sticker.file_unique_id not in EASTER_EGG_STICKERS:
+        return
+    
+    # Only respond if this sticker is a REPLY to one of the bot's messages
+    replied_to = update.message.reply_to_message
+    if not replied_to or not replied_to.from_user:
+        return
+    
+    if replied_to.from_user.id != context.bot.id:
+        return
+    
+    response = EASTER_EGG_STICKERS[sticker.file_unique_id]
+    await update.message.reply_text(response)
 
 # ==========================================
 # MAIN
@@ -323,7 +337,7 @@ async def log_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("updates", updates))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-app.add_handler(MessageHandler(filters.Sticker.ALL, log_sticker))
+app.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
+
 print(f"🤖 LapsaCaptureBot v{VERSION} is running...")
 app.run_polling()
