@@ -316,8 +316,6 @@ async def log_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-# Add this with your other handlers:
-app.add_handler(MessageHandler(filters.Sticker.ALL, log_sticker))
 
 # ==========================================
 # MAIN
@@ -326,6 +324,6 @@ app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("updates", updates))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
+app.add_handler(MessageHandler(filters.Sticker.ALL, log_sticker))
 print(f"🤖 LapsaCaptureBot v{VERSION} is running...")
 app.run_polling()
