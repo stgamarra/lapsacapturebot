@@ -213,7 +213,8 @@ def download_media(url, session_id):
     output_template = os.path.join(DOWNLOAD_DIR, f"{session_id}_%(playlist_index)s.%(ext)s")
     
     ydl_opts = {
-        'format': 'best[filesize<50M]/best',
+        'format': 'bv*[filesize<50M]+ba/b[filesize<50M]/bv*+ba/b',
+        'merge_output_format': 'mp4',
         'outtmpl': output_template,
         'quiet': True,
         'no_warnings': True,
