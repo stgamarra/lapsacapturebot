@@ -369,7 +369,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await updates(update, context)
         return
     
-     url = extract_url(text)
+    url = extract_url(text)
     if not url or not is_supported(url):
         return
     
