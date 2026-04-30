@@ -16,9 +16,13 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # ==========================================
 # VERSION & CHANGELOG
 # ==========================================
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 CHANGELOG = {
+    "1.4.0": [
+        "🍪 Added YouTube Shorts support via authenticated cookies",
+        "🚫 Bot now ignores long YouTube videos to keep groups clean",
+    ],
     "1.3.0": [
         "🔄 Added retry button when downloads fail due to network/timeout",
     ],
@@ -81,6 +85,14 @@ def is_supported(url):
 def is_retryable_error(error_msg):
     err = str(error_msg).lower()
     return not any(keyword in err for keyword in NON_RETRYABLE_KEYWORDS)
+
+def is_youtube_long_video(url):
+    """Check if URL is a long YouTube video (not a Short)."""
+    if "youtube.com/shorts/" in url:
+        return False  # It's a Short, allow it
+    if "youtube.com/watch" in url or "youtu.be/" in url:
+        return True  # Regular video, skip
+    return False
 
 
 def get_video_info(path):
@@ -208,15 +220,30 @@ def download_media(url, session_id):
         'socket_timeout': 30,
     }
     
-    if os.path.exists('cookies.txt'):
+    # Use YouTube cookies from environment variable (for YouTube links only)
+    cookies_path = None
+    youtube_cookies = os.getenv("YOUTUBE_COOKIES")
+    is_youtube = any(domain in url for domain in ["youtube.com", "youtu.be"])
+    
+    if youtube_cookies and is_youtube:
+        cookies_path = os.path.join(DOWNLOAD_DIR, f"{session_id}_yt_cookies.txt")
+        with open(cookies_path, 'w') as f:
+            f.write(youtube_cookies)
+        ydl_opts['cookiefile'] = cookies_path
+    elif os.path.exists('cookies.txt'):
         ydl_opts['cookiefile'] = 'cookies.txt'
     
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.extract_info(url, download=True)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.extract_info(url, download=True)
+    finally:
+        # Clean up the temp cookies file
+        if cookies_path and os.path.exists(cookies_path):
+            os.remove(cookies_path)
     
     files = []
     for f in os.listdir(DOWNLOAD_DIR):
-        if f.startswith(session_id):
+        if f.startswith(session_id) and not f.endswith('_yt_cookies.txt'):
             files.append(os.path.join(DOWNLOAD_DIR, f))
     return sorted(files)
 
@@ -342,8 +369,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await updates(update, context)
         return
     
-    url = extract_url(text)
+     url = extract_url(text)
     if not url or not is_supported(url):
+        return
+    
+    # Skip long YouTube videos silently (only Shorts are supported)
+    if is_youtube_long_video(url):
         return
 
     status_msg = await update.message.reply_text("⏳ Fetching media...")
