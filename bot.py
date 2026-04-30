@@ -227,10 +227,13 @@ def download_media(url, session_id):
     is_youtube = any(domain in url for domain in ["youtube.com", "youtu.be"])
     
     if youtube_cookies and is_youtube:
+        print(f"🍪 Using YouTube cookies (length: {len(youtube_cookies)} chars)")
         cookies_path = os.path.join(DOWNLOAD_DIR, f"{session_id}_yt_cookies.txt")
         with open(cookies_path, 'w') as f:
             f.write(youtube_cookies)
         ydl_opts['cookiefile'] = cookies_path
+    elif is_youtube:
+        print(f"⚠️ YouTube URL but no cookies set!")
     elif os.path.exists('cookies.txt'):
         ydl_opts['cookiefile'] = 'cookies.txt'
     
