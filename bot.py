@@ -78,6 +78,10 @@ def is_supported(url):
     return any(platform in url for platform in SUPPORTED_PLATFORMS)
 
 
+def is_youtube(url):
+    return any(domain in url for domain in ["youtube.com", "youtu.be"])
+
+
 def is_retryable_error(error_msg):
     err = str(error_msg).lower()
     return not any(keyword in err for keyword in NON_RETRYABLE_KEYWORDS)
@@ -343,7 +347,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     url = extract_url(text)
-    if not url or not is_supported(url):
+    if not url:
+        return
+    
+    # Silently ignore YouTube links (will revisit with a better approach)
+    if is_youtube(url):
+        return
+    
+    if not is_supported(url):
         return
 
     status_msg = await update.message.reply_text("⏳ Fetching media...")
