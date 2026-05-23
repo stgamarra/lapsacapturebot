@@ -218,8 +218,7 @@ def download_media(url, session_id):
     output_template = os.path.join(DOWNLOAD_DIR, f"{session_id}_%(playlist_index)s.%(ext)s")
 
     ydl_opts = {
-        # Prefer portrait (9:16) formats first, fall back to any best
-        'format': 'best[height>width][filesize<50M]/best[filesize<50M]/best',
+        'format': 'best[filesize<50M]/best',
         'outtmpl': output_template,
         'quiet': True,
         'no_warnings': True,
