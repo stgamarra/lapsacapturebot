@@ -16,9 +16,14 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # ==========================================
 # VERSION & CHANGELOG
 # ==========================================
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 CHANGELOG = {
+    "1.4.0": [
+        "📐 Reels now always download in 9:16 portrait (no more square crops)",
+        "🎵 Fixed photo carousels with background music failing to send",
+        "🙈 Instagram profile links are now silently ignored",
+    ],
     "1.3.0": [
         "🔄 Added retry button when downloads fail due to network/timeout",
     ],
@@ -80,6 +85,14 @@ def is_supported(url):
 
 def is_youtube(url):
     return any(domain in url for domain in ["youtube.com", "youtu.be"])
+
+
+def is_profile_url(url):
+    """Detect profile/account pages that have no downloadable content."""
+    if "instagram.com" in url:
+        # Content paths: /p/, /reel/, /tv/, /stories/ — anything else is a profile
+        return not any(segment in url for segment in ["/p/", "/reel/", "/tv/", "/stories/"])
+    return False
 
 
 def is_retryable_error(error_msg):
@@ -203,25 +216,32 @@ async def send_as_album_from_query(query, files):
 # ==========================================
 def download_media(url, session_id):
     output_template = os.path.join(DOWNLOAD_DIR, f"{session_id}_%(playlist_index)s.%(ext)s")
-    
+
     ydl_opts = {
-        'format': 'best[filesize<50M]/best',
+        # Prefer portrait (9:16) formats first, fall back to any best
+        'format': 'best[height>width][filesize<50M]/best[filesize<50M]/best',
         'outtmpl': output_template,
         'quiet': True,
         'no_warnings': True,
         'socket_timeout': 30,
+        # Don't abort carousels if one item fails (e.g. music-backed slide)
+        'ignoreerrors': True,
+        # Don't try to merge music tracks into images — we only want the raw media
+        'postprocessors': [],
     }
-    
+
     if os.path.exists('cookies.txt'):
         ydl_opts['cookiefile'] = 'cookies.txt'
-    
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.extract_info(url, download=True)
-    
+
     files = []
     for f in os.listdir(DOWNLOAD_DIR):
         if f.startswith(session_id):
-            files.append(os.path.join(DOWNLOAD_DIR, f))
+            path = os.path.join(DOWNLOAD_DIR, f)
+            if classify_file(path) in ('image', 'video'):
+                files.append(path)
     return sorted(files)
 
 
@@ -353,7 +373,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Silently ignore YouTube links (will revisit with a better approach)
     if is_youtube(url):
         return
-    
+
+    # Silently ignore profile/account pages — no media to download
+    if is_profile_url(url):
+        return
+
     if not is_supported(url):
         return
 
