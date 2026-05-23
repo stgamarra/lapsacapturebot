@@ -172,18 +172,18 @@ async def send_as_album_from_query(query, files):
         kind = classify_file(path)
         with open(path, 'rb') as f:
             if kind == 'image':
-                await query.message.reply_photo(f)
+                await query.message.reply_photo(f, write_timeout=60)
             elif kind == 'video':
                 info = get_video_info(path)
                 if info and info['width'] and info['height']:
                     await query.message.reply_video(
                         f, width=info['width'], height=info['height'],
-                        duration=info['duration'], supports_streaming=True,
+                        duration=info['duration'], supports_streaming=True, write_timeout=60,
                     )
                 else:
-                    await query.message.reply_video(f, supports_streaming=True)
+                    await query.message.reply_video(f, supports_streaming=True, write_timeout=60)
         return
-    
+
     for i in range(0, len(valid_files), ALBUM_MAX):
         chunk = valid_files[i:i + ALBUM_MAX]
         media_group = []
@@ -205,7 +205,7 @@ async def send_as_album_from_query(query, files):
                     else:
                         media_group.append(InputMediaVideo(f, supports_streaming=True))
             if media_group:
-                await query.message.reply_media_group(media_group)
+                await query.message.reply_media_group(media_group, write_timeout=120)
         finally:
             for f in open_files:
                 f.close()
@@ -245,11 +245,11 @@ def download_media(url, session_id):
 
 
 async def download_with_retry(url, session_id, max_retries=1):
-    """Try to download. Retry once on retryable errors."""
+    loop = asyncio.get_event_loop()
     last_error = None
     for attempt in range(max_retries + 1):
         try:
-            return download_media(url, session_id)
+            return await loop.run_in_executor(None, download_media, url, session_id)
         except Exception as e:
             last_error = e
             if attempt < max_retries and is_retryable_error(e):
@@ -283,7 +283,7 @@ async def send_as_album(update, files):
         kind = classify_file(path)
         with open(path, 'rb') as f:
             if kind == 'image':
-                await update.message.reply_photo(f)
+                await update.message.reply_photo(f, write_timeout=60)
             elif kind == 'video':
                 info = get_video_info(path)
                 if info and info['width'] and info['height']:
@@ -293,23 +293,24 @@ async def send_as_album(update, files):
                         height=info['height'],
                         duration=info['duration'],
                         supports_streaming=True,
+                        write_timeout=60,
                     )
                 else:
-                    await update.message.reply_video(f, supports_streaming=True)
+                    await update.message.reply_video(f, supports_streaming=True, write_timeout=60)
         return
-    
+
     # Multiple items — send as album(s) of up to 10
     for i in range(0, len(valid_files), ALBUM_MAX):
         chunk = valid_files[i:i + ALBUM_MAX]
         media_group = []
         open_files = []
-        
+
         try:
             for path in chunk:
                 kind = classify_file(path)
                 f = open(path, 'rb')
                 open_files.append(f)
-                
+
                 if kind == 'image':
                     media_group.append(InputMediaPhoto(f))
                 elif kind == 'video':
@@ -324,9 +325,9 @@ async def send_as_album(update, files):
                         ))
                     else:
                         media_group.append(InputMediaVideo(f, supports_streaming=True))
-            
+
             if media_group:
-                await update.message.reply_media_group(media_group)
+                await update.message.reply_media_group(media_group, write_timeout=120)
         finally:
             for f in open_files:
                 f.close()
