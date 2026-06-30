@@ -4,6 +4,7 @@ import uuid
 import asyncio
 import subprocess
 import json
+from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, InputMediaPhoto, InputMediaVideo, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
@@ -486,6 +487,35 @@ async def handle_retry(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 os.remove(path)
 
 
+FLAGGED_FILE = "flagged_links.txt"
+
+async def flag(update: Update, _context: ContextTypes.DEFAULT_TYPE):
+    replied = update.message.reply_to_message
+    if not replied:
+        await update.message.reply_text("↩️ Reply to a message containing the link you want to flag.")
+        return
+
+    # Try the replied message first; if it's a bot error, check its parent
+    text = replied.text or replied.caption or ""
+    url = extract_url(text)
+    if not url and replied.reply_to_message:
+        parent_text = replied.reply_to_message.text or replied.reply_to_message.caption or ""
+        url = extract_url(parent_text)
+
+    if not url:
+        await update.message.reply_text("❌ No URL found in that message.")
+        return
+
+    user = update.message.from_user
+    username = f"@{user.username}" if user.username else user.full_name
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with open(FLAGGED_FILE, "a") as f:
+        f.write(f"[{timestamp}] {url} — flagged by {username}\n")
+
+    await update.message.reply_text("🚩 Flagged! I'll take a look at it.")
+
+
 # ==========================================
 # EASTER EGGS 🥚
 # ==========================================
@@ -516,6 +546,7 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("updates", updates))
+app.add_handler(CommandHandler("flag", flag))
 app.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 app.add_handler(CallbackQueryHandler(handle_retry, pattern=r'^retry:')) 
