@@ -1,4 +1,4 @@
 python-telegram-bot
-yt-dlp
+yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@master
 python-dotenv
 imageio-ffmpeg
